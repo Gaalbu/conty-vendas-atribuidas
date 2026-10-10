@@ -109,7 +109,7 @@ Vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
 Comece por `src/attribute.ts` (quem leva a venda) e `src/ledger.ts` (estorno). Cada pedido vai para no máximo um criador. Quando cupom e UTM apontam para pessoas diferentes, o cupom vence, porque alguém digitou o código no checkout, e a resposta mostra os dois ids para a disputa ser auditável. UTM que não é id de criador conhecido não conta. Pedido e estorno repetidos não somam: o id é chave primária e a aplicação confere antes. O estorno nunca passa do total: o que não cabe fica `rejected` com motivo e continua visível. Estorno que chega antes do pedido fica `pending` com 202 e aplica, na ordem de recebimento, quando o pedido chega. Nada é apagado.
 
-Testes: `npm test` com 12 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
+Testes: `npm test` com 13 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
 
 Ficou de fora: vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
