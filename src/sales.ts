@@ -25,8 +25,10 @@ type OrderRow = {
   received_at: string;
 };
 
+// BEGIN IMMEDIATE pega o lock de escrita antes da leitura: a checagem de id já
+// visto e a gravação viram um passo só, também entre processos.
 function transaction<T>(db: DatabaseSync, work: () => T): T {
-  db.exec("BEGIN");
+  db.exec("BEGIN IMMEDIATE");
   try {
     const result = work();
     db.exec("COMMIT");
@@ -94,21 +96,30 @@ export function receiveOrder(db: DatabaseSync, payload: Record<string, unknown>,
   const parsed = parseOrder(payload);
   if ("error" in parsed) return { status: 400, body: { error: parsed.error } };
 
-  // Pedido repetido: mesma resposta, nada soma de novo.
-  if (findOrder(db, parsed.id)) return { status: 200, body: readOrder(db, parsed.id) };
-
   const at = instant(payload.received_at, now);
-  const attribution = attribute({
-    couponCreatorId: creatorByCoupon(db, parsed.coupon),
-    utmCreatorId: creatorByUtm(db, parsed.utm_content),
-  });
 
-  transaction(db, () => {
+  return transaction(db, (): Outcome => {
+    // Pedido repetido: mesma resposta, nada soma de novo. O mesmo id com outro
+    // total, cupom ou UTM não é retry: é conflito, e o pedido gravado não muda.
+    // O status pode mudar entre reenvios do webhook e não conta como conflito.
+    const known = findOrder(db, parsed.id);
+    if (known) {
+      const same =
+        known.total_cents === parsed.total_cents &&
+        known.coupon === parsed.coupon &&
+        known.utm_content === parsed.utm_content;
+      if (!same) return { status: 409, body: { error: "pedido já recebido com outro total, cupom ou UTM", id: parsed.id } };
+      return { status: 200, body: readOrder(db, parsed.id) };
+    }
+
+    const attribution = attribute({
+      couponCreatorId: creatorByCoupon(db, parsed.coupon),
+      utmCreatorId: creatorByUtm(db, parsed.utm_content),
+    });
     db.prepare(
       `INSERT INTO orders (id, total_cents, status, coupon, utm_content, creator_id, rule,
          coupon_creator_id, utm_creator_id, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (id) DO NOTHING`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       parsed.id,
       parsed.total_cents,
@@ -122,8 +133,8 @@ export function receiveOrder(db: DatabaseSync, payload: Record<string, unknown>,
       at,
     );
     settlePending(db, parsed.id, parsed.total_cents, at);
+    return { status: 201, body: readOrder(db, parsed.id) };
   });
-  return { status: 201, body: readOrder(db, parsed.id) };
 }
 
 function positiveCents(value: unknown): number | null {
@@ -138,22 +149,28 @@ export function receiveRefund(db: DatabaseSync, payload: Record<string, unknown>
   if (!orderId) return { status: 400, body: { error: "order_id é obrigatório" } };
   if (amount === null) return { status: 400, body: { error: "amount_cents deve ser inteiro positivo" } };
 
-  // O mesmo estorno não aplica duas vezes: devolve o que já foi decidido.
-  const existing = db.prepare("SELECT * FROM refunds WHERE id = ?").get(id) as RefundRow | undefined;
-  if (existing) return { status: 200, body: present(existing) };
-
   const at = instant(payload.received_at, now);
-  const order = findOrder(db, orderId);
 
-  return transaction(db, () => {
+  return transaction(db, (): Outcome => {
+    // O mesmo estorno não aplica duas vezes: devolve o que já foi decidido. O
+    // mesmo id com outro pedido ou valor é conflito.
+    const existing = db.prepare("SELECT * FROM refunds WHERE id = ?").get(id) as RefundRow | undefined;
+    if (existing) {
+      if (existing.order_id !== orderId || existing.amount_cents !== amount) {
+        return { status: 409, body: { error: "estorno já recebido com outro pedido ou valor", id } };
+      }
+      return { status: 200, body: present(existing) };
+    }
+
+    const order = findOrder(db, orderId);
     db.prepare(
       `INSERT INTO refunds (id, order_id, amount_cents, state, reason, received_at)
        VALUES (?, ?, ?, 'pending', ?, ?)`,
     ).run(id, orderId, amount, order ? null : REASON_ORDER_MISSING, at);
     const row = db.prepare("SELECT * FROM refunds WHERE id = ?").get(id) as RefundRow;
 
-    if (!order) return { status: 202 as const, body: present(row) };
+    if (!order) return { status: 202, body: present(row) };
     const resolved = resolveRefund(db, row, order.total_cents, at);
-    return { status: resolved.state === "applied" ? (201 as const) : (409 as const), body: present(resolved) };
+    return { status: resolved.state === "applied" ? 201 : 409, body: present(resolved) };
   });
 }
