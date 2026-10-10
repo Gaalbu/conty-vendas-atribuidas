@@ -10,14 +10,14 @@ export type OrderInput = {
 
 const DECIMAL = /^(\d+)(?:\.(\d{1,2}))?$/;
 
-// "150.00" vira 15000. Mais de duas casas, negativo ou texto: null.
+// "150.00" vira 15000. Mais de duas casas, negativo, texto ou valor acima do
+// inteiro seguro: null. A conta é em BigInt para não arredondar no caminho.
 export function centsFromDecimal(value: unknown): number | null {
   const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
   const match = DECIMAL.exec(text);
   if (!match) return null;
-  const reais = Number(match[1]);
-  const cents = Number((match[2] ?? "").padEnd(2, "0"));
-  return reais * 100 + cents;
+  const cents = BigInt(match[1]!) * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
+  return cents <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(cents) : null;
 }
 
 function totalCents(payload: Record<string, unknown>): number | null {
@@ -37,15 +37,17 @@ function couponCode(payload: Record<string, unknown>): string | null {
   return typeof code === "string" && code.trim() ? code.trim().toUpperCase() : null;
 }
 
+// Base só para resolver landing_site relativo ("/produto?utm_content=…"). O TLD
+// .invalid é reservado (RFC 2606): nenhuma requisição sai daqui.
+const RELATIVE_BASE = "https://loja.invalid";
+
+// landing_site ilegível não é sinal de UTM: a venda segue para cupom ou para
+// "sem cupom nem utm de criador", sem derrubar o webhook.
 function utmContent(payload: Record<string, unknown>): string | null {
   if (typeof payload.utm_content === "string" && payload.utm_content.trim()) return payload.utm_content.trim();
-  if (typeof payload.landing_site !== "string") return null;
-  try {
-    const url = new URL(payload.landing_site, "https://loja.invalid");
-    return url.searchParams.get("utm_content")?.trim() || null;
-  } catch {
-    return null;
-  }
+  if (typeof payload.landing_site !== "string" || !URL.canParse(payload.landing_site, RELATIVE_BASE)) return null;
+  const url = new URL(payload.landing_site, RELATIVE_BASE);
+  return url.searchParams.get("utm_content")?.trim() || null;
 }
 
 export function parseOrder(payload: Record<string, unknown>): OrderInput | { error: string } {

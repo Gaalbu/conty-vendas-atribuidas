@@ -8,7 +8,7 @@ Comece a leitura por [`src/attribute.ts`](src/attribute.ts) e, no estorno anteci
 
 Entrada:
 
-- Total: `total_cents` inteiro, ou `total_price` / `amount` com no máximo duas casas. `150.00` vira 15000. Mais casas → 400.
+- Total: `total_cents` inteiro, ou `total_price` / `amount` com no máximo duas casas. `150.00` vira 15000, numa conta exata em `BigInt`. Mais casas ou valor acima do inteiro seguro → 400, sem gravar.
 - Cupom: `coupon` ou `discount_codes[0].code`, comparado em maiúsculas.
 - UTM: `utm_content` ou o `utm_content` da query de `landing_site`. Só conta se for o id de um criador conhecido.
 
@@ -19,7 +19,7 @@ Atribuição (`src/attribute.ts`):
 3. Só cupom → `cupom`. Só UTM → `utm`.
 4. Nenhum → `creator_id: null`, `sem cupom nem utm de criador`.
 
-Idempotência: o id do pedido e o id do estorno são chave primária, e a aplicação confere antes de inserir. Pedido repetido responde 200 com o mesmo líquido. Estorno repetido responde 200 com o estado já decidido.
+Idempotência: o id do pedido e o id do estorno são chave primária, e a aplicação confere dentro de uma transação `BEGIN IMMEDIATE`. Pedido repetido responde 200 com o mesmo líquido. Estorno repetido responde 200 com o estado já decidido. O mesmo id com outro conteúdo não é retry: pedido com outro total, cupom ou UTM e estorno com outro pedido ou valor respondem 409 e nada muda. O `status` do pedido pode mudar entre reenvios e não conta como conflito.
 
 Estorno (`src/ledger.ts`): estados `pending`, `applied`, `rejected`. A soma de `applied` nunca passa de `total_cents`. Estorno de pedido que ainda não chegou fica `pending` com 202 e motivo `pedido ainda não chegou`. Quando o pedido chega, os pendentes aplicam em ordem de `received_at`. O que não couber vira `rejected` com `estorno passaria do valor da venda` e continua no histórico. `net_cents = total_cents - soma(applied)`.
 
@@ -31,6 +31,7 @@ Estorno (`src/ledger.ts`): estados `pending`, `applied`, `rejected`. A soma de `
 | `POST /webhooks/refunds` sem pedido ainda | 202 |
 | `POST /webhooks/refunds` acima do saldo | 409, estado `rejected` |
 | `POST /webhooks/refunds` repetido | 200 |
+| pedido ou estorno com id já visto e outro conteúdo | 409 |
 | `GET /orders/:id` | 200 ou 404 |
 
 ## Como rodar
@@ -108,8 +109,8 @@ Vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
 Comece por `src/attribute.ts` (quem leva a venda) e `src/ledger.ts` (estorno). Cada pedido vai para no máximo um criador. Quando cupom e UTM apontam para pessoas diferentes, o cupom vence, porque alguém digitou o código no checkout, e a resposta mostra os dois ids para a disputa ser auditável. UTM que não é id de criador conhecido não conta. Pedido e estorno repetidos não somam: o id é chave primária e a aplicação confere antes. O estorno nunca passa do total: o que não cabe fica `rejected` com motivo e continua visível. Estorno que chega antes do pedido fica `pending` com 202 e aplica, na ordem de recebimento, quando o pedido chega. Nada é apagado.
 
-Testes: `npm test` com 7 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
+Testes: `npm test` com 13 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
 
 Ficou de fora: vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
-IA: código, testes e README escritos com assistente de código (Claude Code), a partir de um plano com as regras do desafio. O assistente rodou os testes e o typecheck e colou a resposta real acima.
+IA: código, testes e README escritos com assistente de código (Claude Code), a partir de um plano com as regras do desafio. A conversão exata do total e os conflitos de replay vieram de programação em pares: o Codex auditou a entrega e reproduziu os defeitos; o Claude Code escreveu os testes, corrigiu e publicou.
