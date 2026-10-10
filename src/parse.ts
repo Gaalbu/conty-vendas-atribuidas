@@ -37,15 +37,17 @@ function couponCode(payload: Record<string, unknown>): string | null {
   return typeof code === "string" && code.trim() ? code.trim().toUpperCase() : null;
 }
 
+// Base só para resolver landing_site relativo ("/produto?utm_content=…"). O TLD
+// .invalid é reservado (RFC 2606): nenhuma requisição sai daqui.
+const RELATIVE_BASE = "https://loja.invalid";
+
+// landing_site ilegível não é sinal de UTM: a venda segue para cupom ou para
+// "sem cupom nem utm de criador", sem derrubar o webhook.
 function utmContent(payload: Record<string, unknown>): string | null {
   if (typeof payload.utm_content === "string" && payload.utm_content.trim()) return payload.utm_content.trim();
-  if (typeof payload.landing_site !== "string") return null;
-  try {
-    const url = new URL(payload.landing_site, "https://loja.invalid");
-    return url.searchParams.get("utm_content")?.trim() || null;
-  } catch {
-    return null;
-  }
+  if (typeof payload.landing_site !== "string" || !URL.canParse(payload.landing_site, RELATIVE_BASE)) return null;
+  const url = new URL(payload.landing_site, RELATIVE_BASE);
+  return url.searchParams.get("utm_content")?.trim() || null;
 }
 
 export function parseOrder(payload: Record<string, unknown>): OrderInput | { error: string } {

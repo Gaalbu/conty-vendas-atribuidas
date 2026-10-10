@@ -63,3 +63,18 @@ describe("regressões da auditoria de vendas", () => {
     expect(count("refunds")).toBe(0);
   });
 });
+
+describe("landing_site ilegível", () => {
+  it("não derruba o webhook e não vira UTM: a venda fica com o cupom", async () => {
+    const db = openDatabase();
+    seedCreators(db);
+    const app = createApp(db, () => new Date("2026-06-01T12:00:00.000Z"));
+    const res = await app.request("/webhooks/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "ord_url", total_cents: 500, coupon: "ANA10", landing_site: "http://[::1" }),
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ attribution: { creator_id: "crt_ana", rule: "cupom", utm_creator_id: null } });
+  });
+});
