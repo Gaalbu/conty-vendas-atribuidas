@@ -35,7 +35,7 @@ Estorno (`src/ledger.ts`): estados `pending`, `applied`, `rejected`. A soma de `
 
 ## Como rodar
 
-Node 22 ou maior.
+Node 22.13 ou maior (primeira versão com `node:sqlite` sem flag).
 
 ```bash
 npm install
