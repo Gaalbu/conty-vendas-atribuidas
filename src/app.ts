@@ -35,5 +35,7 @@ export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) 
     return sales ? c.json(sales) : c.json({ error: "criador não encontrado" }, 404);
   });
 
+  app.notFound((c) => c.json({ error: "rota não encontrada" }, 404));
+
   return app;
 }

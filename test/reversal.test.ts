@@ -62,4 +62,10 @@ describe("reversão da atribuição", () => {
     ]);
     expect((await app.request("/creators/crt_fantasma/sales")).status).toBe(404);
   });
+
+  it("rota inexistente responde 404 em JSON", async () => {
+    const res = await app.request("/nao-existe");
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "rota não encontrada" });
+  });
 });
