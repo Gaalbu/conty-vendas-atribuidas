@@ -48,4 +48,18 @@ describe("reversão da atribuição", () => {
     await post("/webhooks/refunds", { id: "rf_p", order_id: "ord_p", amount_cents: 2500 });
     expect(await json<Order>(app.request("/orders/ord_p"))).toMatchObject({ net_cents: 7500, attribution_state: "ativa" });
   });
+
+  it("o resumo por criador soma bruto, estornado e líquido de cada venda atribuída", async () => {
+    await post("/webhooks/orders", { id: "ord_1", total_cents: 10000, coupon: "ANA10" });
+    await post("/webhooks/orders", { id: "ord_2", total_cents: 4000, coupon: "ANA10", status: "cancelled" });
+    await post("/webhooks/orders", { id: "ord_3", total_cents: 9000, coupon: "BRUNO10" });
+    await post("/webhooks/refunds", { id: "rf_1", order_id: "ord_1", amount_cents: 1000 });
+    const sales = await json<Sales>(app.request("/creators/crt_ana/sales"));
+    expect(sales).toMatchObject({ creator_id: "crt_ana", gross_cents: 14000, refunded_cents: 5000, net_cents: 9000 });
+    expect(sales.orders.map((o) => [o.id, o.net_cents, o.attribution_state])).toEqual([
+      ["ord_1", 9000, "ativa"],
+      ["ord_2", 0, "revertida"],
+    ]);
+    expect((await app.request("/creators/crt_fantasma/sales")).status).toBe(404);
+  });
 });

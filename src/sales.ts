@@ -185,3 +185,18 @@ export function receiveRefund(db: DatabaseSync, payload: Record<string, unknown>
   });
 }
 
+// Resumo por criador: bruto das vendas atribuídas, quanto foi estornado e o líquido.
+export function creatorSales(db: DatabaseSync, creatorId: string) {
+  if (!db.prepare("SELECT 1 FROM creators WHERE id = ?").get(creatorId)) return null;
+  const ids = db.prepare("SELECT id FROM orders WHERE creator_id = ? ORDER BY received_at, id").all(creatorId) as Array<{ id: string }>;
+  const orders = ids.map(({ id }) => readOrder(db, id)!);
+  const gross = orders.reduce((sum, o) => sum + o.total_cents, 0);
+  const net = orders.reduce((sum, o) => sum + o.net_cents, 0);
+  return {
+    creator_id: creatorId,
+    gross_cents: gross,
+    refunded_cents: gross - net,
+    net_cents: net,
+    orders: orders.map((o) => ({ id: o.id, total_cents: o.total_cents, net_cents: o.net_cents, attribution_state: o.attribution_state })),
+  };
+}

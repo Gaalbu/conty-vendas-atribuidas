@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { body, BodyError, MAX_BODY_BYTES } from "./body.ts";
-import { readOrder, receiveOrder, receiveRefund } from "./sales.ts";
+import { creatorSales, readOrder, receiveOrder, receiveRefund } from "./sales.ts";
 
 export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) {
   const app = new Hono();
@@ -28,6 +28,11 @@ export function createApp(db: DatabaseSync, now: () => Date = () => new Date()) 
   app.get("/orders/:id", (c) => {
     const order = readOrder(db, c.req.param("id"));
     return order ? c.json(order) : c.json({ error: "pedido não encontrado" }, 404);
+  });
+
+  app.get("/creators/:id/sales", (c) => {
+    const sales = creatorSales(db, c.req.param("id"));
+    return sales ? c.json(sales) : c.json({ error: "criador não encontrado" }, 404);
   });
 
   return app;
