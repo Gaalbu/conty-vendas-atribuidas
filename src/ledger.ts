@@ -47,6 +47,22 @@ export function settlePending(db: DatabaseSync, orderId: string, totalCents: num
 
 export function refundsOf(db: DatabaseSync, orderId: string): RefundRow[] {
   return db
-    .prepare("SELECT * FROM refunds WHERE order_id = ? ORDER BY received_at ASC, id ASC")
+    .prepare("SELECT * FROM refunds WHERE order_id = ? ORDER BY received_at ASC, rowid ASC")
     .all(orderId) as RefundRow[];
+}
+
+export const CANCELLED_STATUSES = new Set(["cancelled", "canceled", "voided", "refunded"]);
+export const REASON_CANCELLED = "pedido cancelado: saldo restante revertido";
+
+// Pedido cancelado, anulado ou estornado na loja reverte o que ainda não foi
+// estornado, num lançamento com id fixo: cancelar de novo não reverte duas vezes.
+export function cancelRemaining(db: DatabaseSync, orderId: string, totalCents: number, at: string): void {
+  const id = `cancelamento:${orderId}`;
+  if (db.prepare("SELECT 1 FROM refunds WHERE id = ?").get(id)) return;
+  const remaining = totalCents - appliedCents(db, orderId);
+  if (remaining <= 0) return;
+  db.prepare(
+    `INSERT INTO refunds (id, order_id, amount_cents, state, reason, received_at, resolved_at)
+     VALUES (?, ?, ?, 'applied', ?, ?, ?)`,
+  ).run(id, orderId, remaining, REASON_CANCELLED, at, at);
 }

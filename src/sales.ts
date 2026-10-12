@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { attribute } from "./attribute.ts";
 import {
   appliedCents,
+  CANCELLED_STATUSES,
+  cancelRemaining,
   REASON_ORDER_MISSING,
   refundsOf,
   resolveRefund,
@@ -77,11 +79,14 @@ function present(refund: RefundRow) {
 export function readOrder(db: DatabaseSync, id: string) {
   const order = findOrder(db, id);
   if (!order) return null;
+  const net = order.total_cents - appliedCents(db, order.id);
   return {
     id: order.id,
     status: order.status,
     total_cents: order.total_cents,
-    net_cents: order.total_cents - appliedCents(db, order.id),
+    net_cents: net,
+    // A atribuição nunca é apagada: com o líquido zerado, ela fica revertida.
+    attribution_state: order.creator_id === null ? "sem_criador" : net === 0 && order.total_cents > 0 ? "revertida" : "ativa",
     attribution: {
       creator_id: order.creator_id,
       rule: order.rule,
@@ -109,6 +114,10 @@ export function receiveOrder(db: DatabaseSync, payload: Record<string, unknown>,
         known.coupon === parsed.coupon &&
         known.utm_content === parsed.utm_content;
       if (!same) return { status: 409, body: { error: "pedido já recebido com outro total, cupom ou UTM", id: parsed.id } };
+      if (CANCELLED_STATUSES.has(parsed.status) && !CANCELLED_STATUSES.has(known.status)) {
+        db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(parsed.status, parsed.id);
+      }
+      if (CANCELLED_STATUSES.has(parsed.status)) cancelRemaining(db, parsed.id, known.total_cents, at);
       return { status: 200, body: readOrder(db, parsed.id) };
     }
 
@@ -133,6 +142,7 @@ export function receiveOrder(db: DatabaseSync, payload: Record<string, unknown>,
       at,
     );
     settlePending(db, parsed.id, parsed.total_cents, at);
+    if (CANCELLED_STATUSES.has(parsed.status)) cancelRemaining(db, parsed.id, parsed.total_cents, at);
     return { status: 201, body: readOrder(db, parsed.id) };
   });
 }
@@ -173,4 +183,20 @@ export function receiveRefund(db: DatabaseSync, payload: Record<string, unknown>
     const resolved = resolveRefund(db, row, order.total_cents, at);
     return { status: resolved.state === "applied" ? 201 : 409, body: present(resolved) };
   });
+}
+
+// Resumo por criador: bruto das vendas atribuídas, quanto foi estornado e o líquido.
+export function creatorSales(db: DatabaseSync, creatorId: string) {
+  if (!db.prepare("SELECT 1 FROM creators WHERE id = ?").get(creatorId)) return null;
+  const ids = db.prepare("SELECT id FROM orders WHERE creator_id = ? ORDER BY received_at, id").all(creatorId) as Array<{ id: string }>;
+  const orders = ids.map(({ id }) => readOrder(db, id)!);
+  const gross = orders.reduce((sum, o) => sum + o.total_cents, 0);
+  const net = orders.reduce((sum, o) => sum + o.net_cents, 0);
+  return {
+    creator_id: creatorId,
+    gross_cents: gross,
+    refunded_cents: gross - net,
+    net_cents: net,
+    orders: orders.map((o) => ({ id: o.id, total_cents: o.total_cents, net_cents: o.net_cents, attribution_state: o.attribution_state })),
+  };
 }

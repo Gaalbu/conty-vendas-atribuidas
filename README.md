@@ -23,6 +23,8 @@ Idempotência: o id do pedido e o id do estorno são chave primária, e a aplica
 
 Estorno (`src/ledger.ts`): estados `pending`, `applied`, `rejected`. A soma de `applied` nunca passa de `total_cents`. Estorno de pedido que ainda não chegou fica `pending` com 202 e motivo `pedido ainda não chegou`. Quando o pedido chega, os pendentes aplicam em ordem de `received_at`. O que não couber vira `rejected` com `estorno passaria do valor da venda` e continua no histórico. `net_cents = total_cents - soma(applied)`.
 
+Reversão: pedido que chega (ou é reenviado) com status `cancelled`, `voided` ou `refunded` reverte o saldo que ainda não foi estornado num lançamento `cancelamento:<id>`, aplicado e com motivo. Cancelar de novo não reverte duas vezes. A atribuição nunca é apagada: `attribution_state` diz se ela está `ativa` ou `revertida` (líquido zerado). Em empate de horário, os lançamentos seguem a ordem de chegada.
+
 | Request | Status |
 | --- | --- |
 | `POST /webhooks/orders` novo | 201 |
@@ -33,6 +35,7 @@ Estorno (`src/ledger.ts`): estados `pending`, `applied`, `rejected`. A soma de `
 | `POST /webhooks/refunds` repetido | 200 |
 | pedido ou estorno com id já visto e outro conteúdo | 409 |
 | `GET /orders/:id` | 200 ou 404 |
+| `GET /creators/:id/sales` | bruto, estornado e líquido do criador, com cada venda e o estado da atribuição |
 
 **Entrada:** corpo precisa ser `application/json` (senão 415), JSON válido e objeto (senão 400) e ter até 64 KB (senão 413). Campo extra do webhook continua aceito, porque a loja manda bem mais que o essencial. Erro inesperado vira `500 {"error":"erro interno"}`, sem stack na resposta.
 
@@ -103,6 +106,23 @@ Segunda resposta, `201`:
 }
 ```
 
+## Critérios do enunciado → testes
+
+| Critério ou entrega | Teste |
+| --- | --- |
+| Webhook repetido não soma de novo | `pedido repetido da Ana com cupom e utm concordando responde 200…` |
+| Estorno rastreável, soma nunca passa do total | `estorno não passa do total: 4000 aplica…`, `6 threads estornando 3000 de um pedido de 10000…` |
+| Estorno parcial, repetido e antes do pedido | `estorno parcial mantém a atribuição ativa`, `estorno não passa do total…` (repetido), `estorno antes do pedido fica pendente com 202…` |
+| Estorno zera ou reverte a atribuição sem apagar histórico | `pedido que muda para cancelado reverte o saldo restante…`, `o resumo por criador soma bruto, estornado e líquido…` |
+| Regra de atribuição num lugar só, com desempate | `src/attribute.ts`; `cupom ANA10 com utm crt_bruno atribui à Ana e guarda os dois ids` |
+
+## Decisões que eu deixaria diferentes com mais tempo
+
+- **Assinatura do webhook.** Uma loja real assina o corpo (HMAC); aqui o webhook é confiável, porque o enunciado não pede conexão com loja real.
+- **Estorno acima do saldo é rejeitado inteiro.** Outra leitura possível é aplicar só o que cabe; escolhi rejeitar para não inventar um valor que a loja não mandou, e o rejeitado fica visível.
+- **Id numérico gigante.** Ids de loja acima de 2^53 chegam como número e perdem precisão no `JSON.parse`; com mais tempo, leria o id do corpo cru.
+- **Pedido não pago.** O status é guardado, mas pedido `pending` conta como venda; com mais tempo, só contaria depois de pago.
+
 ## Ficou de fora
 
 Vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
@@ -111,7 +131,7 @@ Vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
 Comece por `src/attribute.ts` (quem leva a venda) e `src/ledger.ts` (estorno). Cada pedido vai para no máximo um criador. Quando cupom e UTM apontam para pessoas diferentes, o cupom vence, porque alguém digitou o código no checkout, e a resposta mostra os dois ids para a disputa ser auditável. UTM que não é id de criador conhecido não conta. Pedido e estorno repetidos não somam: o id é chave primária e a aplicação confere antes. O estorno nunca passa do total: o que não cabe fica `rejected` com motivo e continua visível. Estorno que chega antes do pedido fica `pending` com 202 e aplica, na ordem de recebimento, quando o pedido chega. Nada é apagado.
 
-Testes: `npm test` com 18 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
+Testes: `npm test` com 25 passando, `npm run typecheck` sem erro. O exemplo deste README é o request do teste do estorno antecipado.
 
 Ficou de fora: vários cupons no mesmo pedido, chargeback e moeda diferente de BRL.
 
