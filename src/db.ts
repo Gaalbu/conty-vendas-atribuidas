@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS refunds (
 
 export function openDatabase(path = ":memory:"): DatabaseSync {
   const db = new DatabaseSync(path);
+  // Outra conexão no mesmo arquivo espera o lock de escrita em vez de falhar.
+  db.exec("PRAGMA busy_timeout = 5000");
+  if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(SCHEMA);
   return db;
 }
